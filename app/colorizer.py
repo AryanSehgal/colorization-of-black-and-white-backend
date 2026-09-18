@@ -10,6 +10,9 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 MAX_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", "24000000"))
 MAX_EDGE = int(os.environ.get("MAX_IMAGE_EDGE", "2400"))
+MODEL_INPUT_SIZE = int(os.environ.get("MODEL_INPUT_SIZE", "224"))
+if MODEL_INPUT_SIZE not in {128, 160, 192, 224}:
+    raise ValueError("MODEL_INPUT_SIZE must be 128, 160, 192, or 224.")
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 
 
@@ -30,6 +33,8 @@ def decode_image(data: bytes) -> np.ndarray:
                     raise InvalidImage(f"Image exceeds the {MAX_PIXELS / 1_000_000:g}-megapixel limit. Resize the photo and retry.")
                 source.load()
                 oriented = ImageOps.exif_transpose(source)
+                # Resize before allocating RGBA/composite copies of large inputs.
+                oriented.thumbnail((MAX_EDGE, MAX_EDGE), Image.Resampling.LANCZOS)
                 # Composite transparency rather than turning transparent pixels black.
                 rgba = oriented.convert("RGBA")
                 background = Image.new("RGBA", rgba.size, "white")
@@ -51,6 +56,8 @@ class Colorizer:
 
     def load(self):
         try:
+            # Bound OpenCV's native thread pool on small CPU instances.
+            cv2.setNumThreads(1)
             proto = self.model_dir / "colorization_deploy_v2.prototxt"
             weights = self.model_dir / "colorization_release_v2.caffemodel"
             centers = self.model_dir / "pts_in_hull.npy"
@@ -68,6 +75,9 @@ class Colorizer:
             ]
             net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
             net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
+            # Winograd's transformed weights/workspace substantially increase
+            # peak RAM for this model. Prefer lower memory use over throughput.
+            net.enableWinograd(False)
             self.net = net
             self.error = ""
         except (OSError, ValueError, cv2.error) as exc:
@@ -79,8 +89,10 @@ class Colorizer:
             raise RuntimeError(self.error)
         # Retain luminance; predict only the a/b chroma channels in CIE Lab.
         normalized = rgb.astype(np.float32) / 255.0
-        lightness = cv2.cvtColor(normalized, cv2.COLOR_RGB2LAB)[:, :, 0]
-        small = cv2.resize(normalized, (224, 224), interpolation=cv2.INTER_AREA)
+        # Copy just L so this view does not retain all three full-size Lab channels.
+        lightness = cv2.cvtColor(normalized, cv2.COLOR_RGB2LAB)[:, :, 0].copy()
+        small = cv2.resize(normalized, (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE), interpolation=cv2.INTER_AREA)
+        del normalized
         centered = cv2.cvtColor(small, cv2.COLOR_RGB2LAB)[:, :, 0] - 50.0
         self.net.setInput(cv2.dnn.blobFromImage(centered))
         chroma = self.net.forward()[0].transpose(1, 2, 0)
