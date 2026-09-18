@@ -26,7 +26,7 @@ Chroma uses the pretrained **Colorful Image Colorization** model by Richard Zhan
 
 **No third-party AI inference API is called.** Model assets are downloaded during setup; image processing then runs locally within the backend service.
 
-![Chroma's frontend showing the backend's colorized coffee result in a before-and-after comparison](docs/images/chroma-studio.png)
+<img width="2522" height="3328" alt="colorization-of-black-and-white-fro vercel app" src="https://github.com/user-attachments/assets/e2bdec43-e5e8-4134-97a1-5bd8d8ab1169" />
 
 *The companion React studio consuming this API. Explore the [frontend repository](https://github.com/AryanSehgal/colorization-of-black-and-white-frontend) for the complete interface.*
 
